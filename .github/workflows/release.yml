@@ -1,0 +1,63 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Validate the tagged installer
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, plistlib, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+              raise SystemExit('Expected a semantic version tag such as v0.3.1')
+          for path in ('Resources/Info.plist', 'release/GlobeSwitch.app/Contents/Info.plist'):
+              with open(path, 'rb') as f:
+                  version = plistlib.load(f)['CFBundleShortVersionString']
+              if tag != 'v' + version:
+                  raise SystemExit(f'{path} version does not match the tag')
+          if not pathlib.Path(f'release-notes/{tag}.md').is_file():
+              raise SystemExit('Release notes are missing')
+          PY
+          (cd release && sha256sum --check SHA256SUMS.txt)
+      - name: Publish the verified DMG and checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          installer="GlobeSwitch-${RELEASE_TAG#v}-arm64.dmg"
+          staging="$RUNNER_TEMP/globeswitch-release"
+          mkdir -p "$staging"
+          cp "release/$installer" "$staging/$installer"
+          (cd "$staging" && sha256sum "$installer" > SHA256SUMS.txt)
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$staging/is-draft" 2>/dev/null; then
+            test "$(cat "$staging/is-draft")" = true || { echo 'Release is already published; refusing to replace its assets.'; exit 1; }
+            gh release upload "$RELEASE_TAG" "$staging/$installer" "$staging/SHA256SUMS.txt" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$staging/$installer" "$staging/SHA256SUMS.txt" \
+              --verify-tag --draft --title "GlobeSwitch ${RELEASE_TAG#v}" \
+              --notes-file "release-notes/$RELEASE_TAG.md"
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          gh release view "$RELEASE_TAG" --json url,tagName,assets

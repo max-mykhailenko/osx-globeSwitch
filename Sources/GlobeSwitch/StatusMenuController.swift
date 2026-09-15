@@ -23,6 +23,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: Self.indicatorWidth)
         super.init()
         menu.delegate = self
+        menu.autoenablesItems = false
         statusItem.menu = menu
 
         controller.objectWillChange
@@ -36,6 +37,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        controller.captureMenuSelection()
         controller.refresh()
         rebuildMenu()
     }
@@ -85,6 +87,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             )
         }
 
+        menu.addItem(.separator())
+        let correction = NSMenuItem(title: "Correct Selected Text & Switch", action: #selector(correctSelection), keyEquivalent: "")
+        correction.target = self
+        correction.isEnabled = controller.hasMenuSelection && !controller.textCorrection.isBusy
+        menu.addItem(correction)
+        addDisabled("Globe: correct selection, otherwise switch")
+        if !controller.textCorrection.hasPermission {
+            let access = NSMenuItem(title: "Enable Text Correction — Accessibility…", action: #selector(requestTextPermission), keyEquivalent: "")
+            access.target = self
+            menu.addItem(access)
+        }
         menu.addItem(.separator())
         addSourceSelectionMenu()
         menu.addItem(.separator())
@@ -206,6 +219,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         item.isEnabled = false
         menu.addItem(item)
         return item
+    }
+
+    @objc private func correctSelection() {
+        controller.correctFromMenu()
+    }
+
+    @objc private func requestTextPermission() {
+        controller.textCorrection.requestPermission()
     }
 
     @objc private func requestPermission() {

@@ -1,4 +1,5 @@
 @preconcurrency import ApplicationServices
+import AppKit
 import Carbon
 import Combine
 import Foundation
@@ -14,6 +15,9 @@ final class GlobeSwitchController: ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var availableSources: [InputSourceSummary] = []
     @Published private(set) var selectedSourceIDs: [String] = []
+
+    let textCorrection = SelectedTextCorrection()
+    private var menuSelection: SelectedTextTarget?
 
     let launchAgentManager = LaunchAgentManager()
 
@@ -36,8 +40,12 @@ final class GlobeSwitchController: ObservableObject {
             defaults.set(selectedSourceIDs, forKey: Self.selectedSourceIDsKey)
         }
         currentSource = inputSources.currentSource()
+        textCorrection.onError = { [weak self] message in
+            self?.errorText = message
+            DiagnosticsLogger.shared.log(message, level: .error)
+        }
         eventMonitor = GlobeEventMonitor(
-            onPress: { [weak self] in self?.switchImmediately() },
+            onPress: { [weak self] in self?.handleGlobePress() },
             onStateChange: { [weak self] state in self?.monitorState = state }
         )
     }
@@ -60,6 +68,7 @@ final class GlobeSwitchController: ObservableObject {
 
     func start() {
         DiagnosticsLogger.shared.log("GlobeSwitch launched")
+        DiagnosticsLogger.shared.log("Selected-text correction: accessibility=\(textCorrection.hasPermission)")
         let availableDescription = availableSources
             .map { "\($0.name) [\($0.id)]" }
             .joined(separator: ", ")
@@ -74,6 +83,7 @@ final class GlobeSwitchController: ObservableObject {
         }
         eventMonitor.start()
         startPermissionRetryTimerIfNeeded()
+        if !textCorrection.hasPermission { textCorrection.requestPermission() }
     }
 
     func stop() {
@@ -153,6 +163,54 @@ final class GlobeSwitchController: ObservableObject {
 
     func isSourceSelected(id: String) -> Bool {
         selectedSourceIDs.contains(id)
+    }
+
+    func captureMenuSelection() {
+        menuSelection = textCorrection.captureSelection()
+    }
+
+    var hasMenuSelection: Bool { menuSelection != nil }
+
+    func correctFromMenu() {
+        guard let selection = menuSelection else {
+            errorText = "Select text in an editable field first. Accessibility permission is required."
+            return
+        }
+        menuSelection = nil
+        // Leave menu tracking before trying to interact with the original field.
+        DispatchQueue.main.async { [weak self] in self?.correctAndSwitch(selection) }
+    }
+
+    private func handleGlobePress() {
+        guard !textCorrection.isBusy else { return }
+        if let selection = textCorrection.captureSelection() {
+            correctAndSwitch(selection)
+        } else {
+            switchImmediately()
+        }
+    }
+
+    private func correctAndSwitch(_ selection: SelectedTextTarget) {
+        do {
+            let next = try inputSources.nextSource(selectedIDs: selectedSourceIDs)
+            guard let language = [CorrectionLanguage.english, .ukrainian].first(where: { $0.sourceID == next.id }) else {
+                errorText = "Selected-text correction supports ABC and Ukrainian-PC. The next layout is \(next.name)."
+                NSSound.beep()
+                return
+            }
+            textCorrection.replace(selection, target: language) { [weak self] in
+                guard let self else { return }
+                let measurement = try self.inputSources.select(id: next.id)
+                self.currentSource = measurement.source
+                self.lastSwitchMilliseconds = measurement.durationMilliseconds
+                self.switchCount += 1
+                self.errorText = nil
+                DiagnosticsLogger.shared.log("Corrected selection and switched to \(next.name)")
+            }
+        } catch {
+            errorText = error.localizedDescription
+            NSSound.beep()
+        }
     }
 
     private func switchImmediately() {

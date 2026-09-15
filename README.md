@@ -6,7 +6,7 @@ input methods, including regional variants such as British English.
 
 It uses a listen-only Core Graphics event tap and calls Apple's Text Input Sources API
 synchronously on the **Globe/Fn key-down** event. There is no language HUD, animation,
-mouse interaction, synthetic keyboard shortcut, shell process, or intentional delay.
+mouse interaction, synthetic switching shortcut, shell process, or intentional delay in language switching.
 The menu-bar indicator uses the same 22-by-16-point dynamic input-source image that
 macOS generates for its own Input menu, such as `A` or `УК`. The image is loaded at
 runtime and cached; if the private system renderer is unavailable after a macOS
@@ -24,10 +24,53 @@ At least two sources must remain selected. The selection persists across launche
 follows the source order reported by macOS. If the current source is outside the
 selection, the next Globe press moves to the first selected source.
 
-Only **Input Monitoring** is required. Accessibility is not needed.
+**Input Monitoring** is required for Globe-key detection. **Accessibility** is
+also required for selected-text correction; grant it to GlobeSwitch in
+**System Settings → Privacy & Security → Device Control and Data Access**
+(on older macOS versions, **Accessibility**). Without Accessibility,
+Globe continues to switch layouts but cannot inspect or correct selected text.
 
 The system setting is important: leaving it on **Change Input Source** makes the native
 handler and GlobeSwitch both react to the same key.
+
+## Correct selected text with Globe
+
+- **No selection:** Globe switches to the next input source on key-down.
+- **Selected editable text:** Globe converts the entire selection to the **next
+  input source in the configured cycle**, replaces it, then selects that source.
+- The menu item **Correct Selected Text & Switch** runs the same correction.
+  There is no separate correction hotkey.
+
+For example, with Ukrainian active, select `руддщ` and press Globe: it becomes
+`hello` and ABC becomes active. With ABC active, select `ghbdsn`: it becomes
+`привіт` and Ukrainian becomes active. The destination always follows the cycle;
+it is not inferred from the text. If you already manually changed layouts, the
+next cycle entry still determines the destination.
+
+Conversion currently supports **ABC ↔ Ukrainian-PC**. It reads macOS's actual
+key-layout data for normal and Shift key states, including punctuation. Characters
+absent from the source map (such as emoji and target-language letters) are retained.
+This is physical-key correction, not translation, spelling correction, or phonetic
+transliteration. Option/dead-key sequences and smart punctuation cannot always be
+reconstructed from their resulting text. Duplicate key outputs use the primary key.
+If the next cycle entry is another layout, correction reports an unsupported-layout
+message and leaves the text and layout unchanged.
+
+Correction checks the focused editable field via Accessibility. After Globe and
+modifiers are released, it uses the field's normal Paste operation so the host app
+can supply its usual **Command-Z** undo. A copy fallback is used only when macOS
+reports a nonempty selection but cannot return its text. Clipboard formats are
+restored afterward unless another clipboard update occurred. Text is processed
+locally and is never logged or sent to a model.
+
+Focus and selection are rechecked before replacement. Replacement is verified via
+the field's value or caret position before switching layouts; an unverified paste
+is never retried automatically. Password fields and Secure Input are excluded.
+Some custom or inaccessible fields do not expose a selection and therefore fall
+back to ordinary switching. If a field accepts Paste but does not expose enough
+information to verify it, the text may change while the layout stays unchanged;
+a beep and a menu error explain this. Universal support for all custom controls
+cannot be guaranteed.
 
 ## Deliberate trade-off
 
@@ -50,8 +93,9 @@ swift test
 
 The staged bundle is `dist/GlobeSwitch.app`.
 
-The app icon source and packaged macOS icon are kept in `Resources/AppIcon-1024.png`
-and `Resources/AppIcon.icns`.
+The selected Fold artwork lives in `Resources/IconDesign/Fold-original.png`.
+Run `./script/build_icon.sh` to regenerate `Resources/AppIcon-1024.png` and
+`Resources/AppIcon.icns` at all standard macOS sizes.
 
 ## Personal installer
 
@@ -69,7 +113,7 @@ known-good installer can be restored without Xcode:
 ```text
 release/
 ├── GlobeSwitch.app
-├── GlobeSwitch-0.2.5-arm64.dmg
+├── GlobeSwitch-0.3.1-arm64.dmg
 └── SHA256SUMS.txt
 ```
 
@@ -85,3 +129,23 @@ The app needs Input Monitoring permission for its listen-only event tap. The loc
 bundle is ad-hoc signed because this Mac currently has no Developer ID or Apple
 Development code-signing identity. Its explicit designated requirement is stable
 across local builds so macOS can retain the permission for this bundle identifier.
+
+## Permission switch is on but correction does not work
+
+A visible enabled switch does not prove the running executable is trusted. In the
+2026-09-15 investigation, macOS TCC logged `Failed to match existing code requirement`
+for GlobeSwitch: the stored Accessibility approval referenced an older code hash.
+The installed app consequently reported `AXIsProcessTrusted() == false`.
+
+Repair the app-specific permission record through System Settings and select the
+current `/Applications/GlobeSwitch.app`; toggling the stale entry alone may not
+refresh its code requirement. Recheck the app's startup diagnostics after restart.
+Do not change any other application's permission or edit the TCC database.
+
+## GitHub releases
+
+The tag-triggered `.github/workflows/release.yml` checks the version and committed
+installer checksums, then publishes the DMG and a download-only `SHA256SUMS.txt`.
+Add matching `release-notes/vX.Y.Z.md`, run the local release packager, commit the
+verified artifacts, and push the matching `vX.Y.Z` tag. The workflow uploads to a
+draft first and publishes only after the assets have uploaded.

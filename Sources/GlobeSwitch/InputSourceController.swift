@@ -110,6 +110,25 @@ final class InputSourceController {
         )
     }
 
+    func nextSource(selectedIDs: [String]) throws -> InputSourceSummary {
+        guard selectedIDs.count >= 2,
+              let id = InputSourceCycle(sourceIDs: selectedIDs).nextID(currentID: currentSource()?.id),
+              let source = availableSources.first(where: { $0.id == id }) else {
+            throw InputSourceError.insufficientSelectedSources
+        }
+        return source
+    }
+
+    func select(id: String) throws -> SwitchMeasurement {
+        guard let source = sourcesByID[id] else { throw InputSourceError.selectedSourceUnavailable(id) }
+        let start = DispatchTime.now().uptimeNanoseconds
+        let status = TISSelectInputSource(source)
+        guard status == noErr else { throw InputSourceError.selectionFailed(status) }
+        guard let selected = summary(for: source) else { throw InputSourceError.currentSourceUnavailable }
+        return SwitchMeasurement(source: selected,
+            durationMilliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+    }
+
     private func summary(for source: TISInputSource) -> InputSourceSummary? {
         guard let id = stringProperty(source, kTISPropertyInputSourceID) else { return nil }
         let name = stringProperty(source, kTISPropertyLocalizedName) ?? id

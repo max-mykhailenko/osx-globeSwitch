@@ -23,7 +23,9 @@ GlobeSwitch — встановлення на macOS
 
 5. Запустіть GlobeSwitch. У menu bar відкрийте його меню та виберіть
    Request Keyboard Access… . У System Settings → Privacy & Security →
-   Input Monitoring увімкніть GlobeSwitch. Accessibility не потрібен.
+   Input Monitoring увімкніть GlobeSwitch. Для виправлення виділеного тексту
+   також увімкніть GlobeSwitch у Privacy & Security → Device Control and Data Access
+   (у попередніх версіях macOS цей розділ називається Accessibility).
    Якщо система попросить — перезапустіть GlobeSwitch.
 
 6. У меню GlobeSwitch → Input Sources in Globe Cycle позначте галочками
@@ -43,3 +45,14 @@ GlobeSwitch — встановлення на macOS
 - Якщо після оновлення Globe monitor не активний, вимкніть і знову ввімкніть
   GlobeSwitch у Input Monitoring.
 - Інсталятор призначений для Apple Silicon (arm64) і macOS 14 або новішої.
+
+Виправлення розкладки виділеного тексту (0.3.0):
+Надайте GlobeSwitch доступ у System Settings → Privacy & Security → Device Control and Data Access
+(Accessibility у попередніх версіях macOS).
+Без виділення Globe перемикає мову. З виділенням — виправляє текст відповідно до
+наступної розкладки в циклі, а потім перемикає мову. Підтримується ABC ↔ Ukrainian-PC.
+Альтернатива: пункт меню Correct Selected Text & Switch. Окремої гарячої клавіші немає.
+
+Якщо дозвіл увімкнений, але виправлення не працює після оновлення, оновіть запис
+дозволу й додайте саме /Applications/GlobeSwitch.app: старий запис може посилатися
+на підпис попередньої версії.

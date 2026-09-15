@@ -2,3 +2,8 @@
 dist/
 .DS_Store
 *.xcuserstate
+
+.local-backups/
+
+# Local macOS diagnostics retained for troubleshooting.
+evidence/*.txt

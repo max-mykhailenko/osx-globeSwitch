@@ -49,3 +49,30 @@ import Testing
     )
     #expect(reconciled == ["EN"])
 }
+
+@Test @MainActor func correctsWrongLayoutInBothDirections() throws {
+    let correction = try LayoutCorrection()
+    #expect(correction.convert("руддщ", to: .english).text == "hello")
+    #expect(correction.convert("ghbdsn", to: .ukrainian).text == "привіт")
+    #expect(correction.convert("Руддщ", to: .english).text == "Hello")
+    #expect(correction.convert("Ghbdsn", to: .ukrainian).text == "Привіт")
+}
+
+@Test @MainActor func directionIsExplicitAndUnmappedCharactersSurvive() throws {
+    let correction = try LayoutCorrection()
+    #expect(correction.convert("руддщ hello 👩🏽‍💻\n123", to: .english).text == "hello hello 👩🏽‍💻\n123")
+    #expect(correction.convert("ghbdsn привіт", to: .ukrainian).text == "привіт привіт")
+    #expect(correction.convert("hello", to: .english).text == "hello")
+    #expect(correction.convert("", to: .ukrainian).text == "")
+    #expect(correction.convert("hello", to: .ukrainian).target == .ukrainian)
+}
+
+@Test @MainActor func roundTripsAlphabetAndKeyboardPunctuation() throws {
+    let correction = try LayoutCorrection()
+    let alphabet = "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
+    let ukrainian = correction.convert(alphabet, to: .ukrainian).text
+    #expect(correction.convert(ukrainian, to: .english).text == alphabet)
+    #expect(correction.convert("[];',.", to: .ukrainian).text == "хїжєбю")
+    #expect(correction.convert("хїжєбю", to: .english).text == "[];',.")
+    #expect(correction.convert(" \n\t🙂", to: .english).text == " \n\t🙂")
+}
