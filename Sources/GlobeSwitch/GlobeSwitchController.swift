@@ -185,6 +185,10 @@ final class GlobeSwitchController: ObservableObject {
         guard !textCorrection.isBusy else { return }
         if let selection = textCorrection.captureSelection() {
             correctAndSwitch(selection)
+        } else if textCorrection.accessibilityActivationPending {
+            // The renderer may build its accessibility tree asynchronously.
+            // Keep the intended correction direction on this first attempt.
+            errorText = textCorrection.captureIssue
         } else {
             switchImmediately()
         }

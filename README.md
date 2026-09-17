@@ -72,6 +72,40 @@ information to verify it, the text may change while the layout stays unchanged;
 a beep and a menu error explain this. Universal support for all custom controls
 cannot be guaranteed.
 
+When **Correct Selected Text & Switch** is disabled, the menu now explains whether
+correction is busy, permission is missing, Secure Input is active, the focused
+field is unavailable, no selection is exposed, or the selected element is not
+editable. These messages do not include selected text. Selection capture checks
+both direct text and text-marker text, even when the numeric range is collapsed.
+Conflicting numeric ranges are not used to calculate the expected replacement.
+
+The user reported on 2026-09-17 that correction works in Messages but is disabled
+in both ChatGPT Work editors. A subsequent user screenshot showed error `-25212`
+(`kAXErrorNoValue`) while reading `AXFocusedUIElement`, before reading selection.
+The selection fallback changes therefore did not resolve the observed blocker.
+When the app exposes no focused field, GlobeSwitch makes one activation attempt
+per app launch, first using Electron's
+[`AXManualAccessibility`](https://www.electronjs.org/docs/latest/tutorial/accessibility).
+The user's next screenshot showed `-25205` (`kAXErrorAttributeUnsupported`) for
+that request. The installed framework contains `AXEnhancedUserInterface` but no
+`AXManualAccessibility` string. GlobeSwitch now falls back to
+`AXEnhancedUserInterface` only when the manual attribute is explicitly unsupported.
+[Chromium's implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/chrome_browser_application_mac.mm)
+uses a two-second debounce before enabling full accessibility support, so allow
+about three seconds after the first request before retesting. This timing comes
+from upstream source, not a measurement of the installed app.
+GlobeSwitch never disables these flags. If the renderer is not ready immediately, the menu
+asks the user to select the text and retry; that initial Globe press does not
+switch layouts. No background UI traversal or text logging is added.
+Selection evidence and activation negotiation are covered by 17 passing unit
+tests. On 2026-09-17, after adding the Chromium fallback, the user confirmed that
+correction works in ChatGPT Work. The app log also recorded three completed
+corrections at 18:10:22, 18:10:24, and 18:10:30 UTC. Those log entries do not
+identify the host editor; separate coverage of both ChatGPT editors and behavior
+after restarting ChatGPT have not yet been independently verified.
+
+Version 0.3.2 (build 10) includes these compatibility changes.
+
 ## Deliberate trade-off
 
 GlobeSwitch optimizes for typing speed by switching on key-down, not key-up. Globe/Fn
@@ -113,7 +147,7 @@ known-good installer can be restored without Xcode:
 ```text
 release/
 ├── GlobeSwitch.app
-├── GlobeSwitch-0.3.1-arm64.dmg
+├── GlobeSwitch-0.3.2-arm64.dmg
 └── SHA256SUMS.txt
 ```
 

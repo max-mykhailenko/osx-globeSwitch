@@ -92,6 +92,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         correction.target = self
         correction.isEnabled = controller.hasMenuSelection && !controller.textCorrection.isBusy
         menu.addItem(correction)
+        if controller.textCorrection.isBusy {
+            addDisabled("Text correction is in progress.")
+        } else if !controller.hasMenuSelection, let reason = controller.textCorrection.captureIssue {
+            addDisabled(reason)
+        }
         addDisabled("Globe: correct selection, otherwise switch")
         if !controller.textCorrection.hasPermission {
             let access = NSMenuItem(title: "Enable Text Correction — Accessibility…", action: #selector(requestTextPermission), keyEquivalent: "")

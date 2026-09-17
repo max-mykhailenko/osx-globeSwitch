@@ -15,6 +15,11 @@ struct SelectedTextTarget {
 @MainActor
 final class SelectedTextCorrection {
     private(set) var isBusy = false
+    private(set) var captureIssue: String?
+    private(set) var accessibilityActivationPending = false
+    // One activation attempt per app launch, only after an explicit user action.
+    // Never turn accessibility off: another assistive tool may also depend on it.
+    private var accessibilityActivationAttempts: [pid_t: (launch: Date, result: AccessibilityActivation)] = [:]
     private var converter: LayoutCorrection?
     var onError: ((String) -> Void)?
 
@@ -26,28 +31,68 @@ final class SelectedTextCorrection {
     }
 
     func captureSelection(in application: NSRunningApplication? = nil) -> SelectedTextTarget? {
-        guard hasPermission, !IsSecureEventInputEnabled(),
-              let application = application ?? NSWorkspace.shared.frontmostApplication,
-              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        captureIssue = nil
+        accessibilityActivationPending = false
+        guard hasPermission else { return unavailable("Accessibility permission is required.") }
+        guard !IsSecureEventInputEnabled() else { return unavailable("Secure Input is active.") }
+        guard let application = application ?? NSWorkspace.shared.frontmostApplication,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return unavailable("Focus the text field in the other app first.")
+        }
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 0.08)
-        guard let raw = attribute(appElement, kAXFocusedUIElementAttribute),
-              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
-        let element = unsafeDowncast(raw, to: AXUIElement.self)
-        AXUIElementSetMessagingTimeout(element, 0.08)
-        if attribute(element, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole { return nil }
-        let range = selectedRange(element)
-        // Return early on the common no-selection path, before reading text.
-        if let range, range.length == 0 { return nil }
-        var selectedText = attribute(element, kAXSelectedTextAttribute) as? String
-        let marker = attribute(element, "AXSelectedTextMarkerRange")
-        if selectedText == nil, let marker {
-            var result: CFTypeRef?
-            if AXUIElementCopyParameterizedAttributeValue(element, "AXStringForTextMarkerRange" as CFString, marker, &result) == .success {
-                selectedText = result as? String
+        var raw: CFTypeRef?
+        var focusStatus = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &raw)
+        if focusStatus == .noValue || focusStatus == .attributeUnsupported {
+            let pid = application.processIdentifier
+            let launch = application.launchDate ?? .distantPast
+            if accessibilityActivationAttempts[pid]?.launch != launch {
+                // Electron uses AXManualAccessibility; Chromium supports
+                // AXEnhancedUserInterface with a two-second activation debounce.
+                // Both enable the renderer's AX tree without granting TCC access.
+                let activation = AccessibilityActivation.request { name in
+                    AXUIElementSetAttributeValue(appElement, name as CFString, kCFBooleanTrue)
+                }
+                accessibilityActivationAttempts[pid] = (launch, activation)
+                if activation.status == .success {
+                    raw = nil
+                    focusStatus = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &raw)
+                    if focusStatus != .success {
+                        accessibilityActivationPending = true
+                        return unavailable("Accessibility requested. Wait a moment, then select the text again.")
+                    }
+                }
             }
         }
-        guard (range?.length ?? 0) > 0 || !(selectedText ?? "").isEmpty else { return nil }
+        guard focusStatus == .success, let raw,
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+            if let attempt = accessibilityActivationAttempts[application.processIdentifier] {
+                return unavailable("Focused field unavailable (\(focusStatus.rawValue)); \(attempt.result.attribute): \(attempt.result.status.rawValue).")
+            }
+            return unavailable("The app did not expose its focused field (\(focusStatus.rawValue)).")
+        }
+        let element = unsafeDowncast(raw, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(element, 0.08)
+        if attribute(element, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole {
+            return unavailable("Password fields cannot be corrected.")
+        }
+        let range = selectedRange(element)
+        let selectedText = attribute(element, kAXSelectedTextAttribute) as? String
+        let marker = attribute(element, "AXSelectedTextMarkerRange")
+        var markerText: String?
+        if selectedText?.isEmpty != false, let marker {
+            var result: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(element, "AXStringForTextMarkerRange" as CFString, marker, &result) == .success {
+                markerText = result as? String
+            }
+        }
+        let evidence = SelectionEvidence(text: selectedText, markerText: markerText,
+                                         range: range.map { NSRange(location: $0.location, length: $0.length) })
+        guard evidence.hasSelection else {
+            return unavailable(range?.length == 0
+                ? "The field reports no selected text."
+                : "The field did not expose a readable selection.")
+        }
         let role = attribute(element, kAXRoleAttribute) as? String
         // Read-only page selections must not become a paste into another field.
         var writable = DarwinBoolean(false)
@@ -55,9 +100,17 @@ final class SelectedTextCorrection {
         var writableSelection = DarwinBoolean(false)
         _ = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &writableSelection)
         let editable = attribute(element, "AXEditable") as? Bool == true
-        guard [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? "") || writable.boolValue || writableSelection.boolValue || editable else { return nil }
-        return SelectedTextTarget(application: application, element: element, text: selectedText,
-                                  range: range, markerRange: marker)
+        guard [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? "") || writable.boolValue || writableSelection.boolValue || editable else {
+            return unavailable("The selected element is not exposed as editable.")
+        }
+        return SelectedTextTarget(application: application, element: element, text: evidence.text,
+                                  range: evidence.range.map { CFRange(location: $0.location, length: $0.length) },
+                                  markerRange: marker)
+    }
+
+    private func unavailable(_ reason: String) -> SelectedTextTarget? {
+        captureIssue = reason
+        return nil
     }
 
     func replace(_ selection: SelectedTextTarget, target: CorrectionLanguage,
@@ -146,8 +199,9 @@ final class SelectedTextCorrection {
                                 verified = true
                                 break
                             }
-                        } else if let range = selectedRange(selection.element), range.length == 0,
-                                  range.location == (selection.range?.location ?? -1) + result.text.utf16.count {
+                        } else if let originalRange = selection.range,
+                                  let range = selectedRange(selection.element), range.length == 0,
+                                  range.location == originalRange.location + result.text.utf16.count {
                             verified = true
                             break
                         }
